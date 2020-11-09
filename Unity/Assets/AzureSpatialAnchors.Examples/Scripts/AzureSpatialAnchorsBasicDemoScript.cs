@@ -188,7 +188,7 @@ namespace Microsoft.Azure.SpatialAnchors.Unity.Examples
                     currentAppState = AppState.DemoStepConfigSession;
                     break;
                 case AppState.DemoStepConfigSession:
-                    ConfigureSession();
+                    ConfigureSession();// AA: Comes handy during querying part
                     currentAppState = AppState.DemoStepStartSession;
                     break;
                 case AppState.DemoStepStartSession:
