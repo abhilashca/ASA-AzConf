@@ -10,13 +10,15 @@ using UnityEngine.UI;
 
 public class BasicDemoScript : InputInteractionBase
 {
-
-    #region Member Variables
+    #region Fields
 
     private string currentAnchorId = "";
-    private CloudSpatialAnchor currentCloudAnchor;
     private CloudSpatialAnchorWatcher currentWatcher;
+    private CloudSpatialAnchor currentCloudAnchor;
     private GameObject spawnedObject = null;
+    private readonly List<string> anchorIdsToLocate = new List<string>();
+    private AnchorLocateCriteria anchorLocateCriteria = null;
+    private bool canPlaceObject = false;
 
     #endregion
 
@@ -51,7 +53,7 @@ public class BasicDemoScript : InputInteractionBase
 
     public override void Start()
     {
-        StartASA();
+        StartASAAsync();
         base.Start();
     }
 
@@ -82,6 +84,9 @@ public class BasicDemoScript : InputInteractionBase
     /// <param name="target">The target.</param>
     protected override void OnSelectObjectInteraction(Vector3 hitPoint, object target)
     {
+        if (!canPlaceObject)
+            return;
+
         Quaternion rotation = Quaternion.AngleAxis(0, Vector3.up);
 
         SpawnOrMoveCurrentAnchoredObject(hitPoint, rotation);
@@ -93,6 +98,9 @@ public class BasicDemoScript : InputInteractionBase
     /// <param name="touch">The touch.</param>
     protected override void OnTouchInteraction(Touch touch)
     {
+        if (!canPlaceObject)
+            return;
+
         base.OnTouchInteraction(touch);
     }
 
@@ -107,19 +115,12 @@ public class BasicDemoScript : InputInteractionBase
 
     private void CloudManager_LocateAnchorsCompleted(object sender, LocateAnchorsCompletedEventArgs args)
     {
-        // TODO: Expand
-        //OnCloudLocateAnchorsCompleted(args);
-
         Log("event: CloudManager_LocateAnchorsCompleted");
     }
 
     private void CloudManager_Error(object sender, SessionErrorEventArgs args)
     {
-        // TODO: Expand
-        //isErrorActive = true;
         Log("event: CloudManager_Error: " + args.ErrorMessage);
-
-        //UnityDispatcher.InvokeOnAppThread(() => this.feedbackBox.text = string.Format("Error: {0}", args.ErrorMessage));
     }
 
     private void CloudManager_LogDebug(object sender, OnLogDebugEventArgs args)
@@ -129,19 +130,29 @@ public class BasicDemoScript : InputInteractionBase
 
     private void CloudManager_AnchorLocated(object sender, AnchorLocatedEventArgs args)
     {
-        // TODO: Expand
         Log("event: CloudManager_AnchorLocated");
         Debug.LogFormat("Anchor recognized as a possible anchor {0} {1}", args.Identifier, args.Status);
         if (args.Status == LocateAnchorStatus.Located)
         {
-            //OnCloudAnchorLocated(args);
+            currentCloudAnchor = args.Anchor;
+
+            UnityDispatcher.InvokeOnAppThread(() =>
+            {
+                Pose anchorPose = Pose.identity;
+
+#if UNITY_ANDROID || UNITY_IOS
+                anchorPose = currentCloudAnchor.GetPose();
+#endif
+                // HoloLens: The position will be set based on the unityARUserAnchor that was located.
+                SpawnOrMoveCurrentAnchoredObject(anchorPose.position, anchorPose.rotation);
+            });
         }
     }
 
     private void CloudManager_SessionUpdated(object sender, SessionUpdatedEventArgs args)
     {
-        //Debug.Log("CloudManager_SessionUpdated");
-        Log("event: CloudManager_SessionUpdated");
+        Debug.Log("CloudManager_SessionUpdated");
+        //Log("event: CloudManager_SessionUpdated");
         //OnCloudSessionUpdated();
     }
 
@@ -149,12 +160,22 @@ public class BasicDemoScript : InputInteractionBase
 
     #region Methods
 
-    public void TryStartASA()
+    public void TrySaveAnchor()
     {
-        
+        SaveAnchorAsync();
     }
 
-    private async Task StartASA()
+    public void TryQueryAnchor()
+    {
+        QueryASAAsync();
+    }
+
+    public void TryDeleteAnchor()
+    {
+        DeleteASAAsync();
+    }
+
+    private async Task StartASAAsync()
     {
         Log("\nStarting...");
 
@@ -162,6 +183,8 @@ public class BasicDemoScript : InputInteractionBase
 
         currentAnchorId = "";
         currentCloudAnchor = null;
+
+        anchorLocateCriteria = new AnchorLocateCriteria();
 
         CloudManager.SessionStarted += CloudManager_SessionStarted;
         CloudManager.SessionUpdated += CloudManager_SessionUpdated;
@@ -176,6 +199,8 @@ public class BasicDemoScript : InputInteractionBase
 
             await CloudManager.CreateSessionAsync();
 
+            ConfigureSession();
+
             await Task.Delay(3000);
 
             Log("Starting session...");
@@ -183,6 +208,7 @@ public class BasicDemoScript : InputInteractionBase
             await CloudManager.StartSessionAsync();
 
             Log("Tap anywhere to place object");
+            canPlaceObject = true;
         }
         catch (Exception e)
         {
@@ -192,16 +218,70 @@ public class BasicDemoScript : InputInteractionBase
         }
     }
 
+    private async Task SaveAnchorAsync()
+    {
+        canPlaceObject = false;
+
+        Log("Saving anchor...");
+        await SaveCurrentObjectAnchorToCloudAsync();
+
+        await Task.Delay(2000);
+
+        Log("Stopping session...");
+        CloudManager.StopSession();
+
+        Log("Cleaning up spawned objects...");
+        CleanupSpawnedObjects();
+
+        Log("Resetting session...");
+        await CloudManager.ResetSessionAsync();
+
+        Log("Ready for querying...");
+    }
+
+    private async Task QueryASAAsync()
+    {
+        ConfigureSession();
+
+        Log("Starting session...");
+        await CloudManager.StartSessionAsync();
+
+        await Task.Delay(3000);
+
+        Log("Creating watcher...");
+        currentWatcher = CloudManager.Session.CreateWatcher(anchorLocateCriteria);
+
+        Log("Looking for anchors...");
+    }
+
+    private async Task DeleteASAAsync()
+    {
+        Log("Deleting anchors...");
+        await CloudManager.DeleteAnchorAsync(currentCloudAnchor);
+
+        Log("Stopping session");
+        CloudManager.StopSession();
+
+        currentWatcher = null;
+        currentCloudAnchor = null;
+
+        Log("Cleaning up...");
+        CleanupSpawnedObjects();
+    }
+
     /// <summary>
     /// Saves the current object anchor to the cloud.
     /// </summary>
-    protected async Task SaveCurrentObjectAnchorToCloudAsync()
+    private async Task SaveCurrentObjectAnchorToCloudAsync()
     {
-        /*// Get the cloud-native anchor behavior
+        // Get the cloud-native anchor behavior
         CloudNativeAnchor cna = spawnedObject.GetComponent<CloudNativeAnchor>();
 
         // If the cloud portion of the anchor hasn't been created yet, create it
-        if (cna.CloudAnchor == null) { cna.NativeToCloud(); }
+        if (cna.CloudAnchor == null)
+        {
+            cna.NativeToCloud();
+        }
 
         // Get the cloud portion of the anchor
         CloudSpatialAnchor cloudAnchor = cna.CloudAnchor;
@@ -213,12 +293,12 @@ public class BasicDemoScript : InputInteractionBase
         {
             await Task.Delay(330);
             float createProgress = CloudManager.SessionStatus.RecommendedForCreateProgress;
-            feedbackBox.text = $"Move your device to capture more environment data: {createProgress:0%}";
+            Log($"Move your device to capture more environment data: {createProgress:0%}");
         }
 
         bool success = false;
 
-        feedbackBox.text = "Saving...";
+        Log("Saving...");
 
         try
         {
@@ -231,8 +311,9 @@ public class BasicDemoScript : InputInteractionBase
             // Success?
             success = currentCloudAnchor != null;
 
-            if (success && !isErrorActive)
+            if (success)// && !isErrorActive)   // TODO: Check
             {
+                Log("Saving completed");
                 // Await override, which may perform additional tasks
                 // such as storing the key in the AnchorExchanger
                 await OnSaveCloudAnchorSuccessfulAsync();
@@ -245,7 +326,40 @@ public class BasicDemoScript : InputInteractionBase
         catch (Exception ex)
         {
             OnSaveCloudAnchorFailed(ex);
-        }*/
+        }
+    }
+
+    private async Task OnSaveCloudAnchorSuccessfulAsync()
+    {
+        //await base.OnSaveCloudAnchorSuccessfulAsync();    // TODO: check Task.Completed in base, so ignored.
+
+        Debug.Log("Anchor created, yay!");
+
+        currentAnchorId = currentCloudAnchor.Identifier;
+
+        // Sanity check that the object is still where we expect
+        Pose anchorPose = Pose.identity;
+
+#if UNITY_ANDROID || UNITY_IOS
+        anchorPose = currentCloudAnchor.GetPose();
+#endif
+        // HoloLens: The position will be set based on the unityARUserAnchor that was located.
+
+        SpawnOrMoveCurrentAnchoredObject(anchorPose.position, anchorPose.rotation);
+    }
+
+    /// <summary>
+    /// Called when a cloud anchor is not saved successfully.
+    /// </summary>
+    /// <param name="exception">The exception.</param>
+    private void OnSaveCloudAnchorFailed(Exception exception)
+    {
+        // we will block the next step to show the exception message in the UI.
+        //isErrorActive = true;
+        //Debug.LogException(exception);
+        Log("Failed to save anchor: " + exception.ToString());
+
+        //UnityDispatcher.InvokeOnAppThread(() => this.feedbackBox.text = string.Format("Error: {0}", exception.ToString()));
     }
 
     /// <summary>
@@ -353,13 +467,6 @@ public class BasicDemoScript : InputInteractionBase
         }
     }
 
-    private void Log(string message)
-    {
-        var msg = message + "\n" + logText.text;
-        logText.text = msg;
-        Debug.Log(message);
-    }
-
     protected virtual void CleanupSpawnedObjects()
     {
         if (spawnedObject != null)
@@ -373,6 +480,38 @@ public class BasicDemoScript : InputInteractionBase
         //    Destroy(spawnedObjectMat);
         //    spawnedObjectMat = null;
         //}
+    }
+
+    private void ConfigureSession()
+    {
+        List<string> anchorsToFind = new List<string>();
+        if (!string.IsNullOrEmpty(currentAnchorId))
+        {
+            anchorsToFind.Add(currentAnchorId);
+        }
+
+        SetAnchorIdsToLocate(anchorsToFind);
+    }
+
+    private void SetAnchorIdsToLocate(IEnumerable<string> anchorIds)
+    {
+        if (anchorIds == null)
+        {
+            Log("Error: AnchorIds are null");
+            throw new ArgumentNullException(nameof(anchorIds));
+        }
+
+        anchorIdsToLocate.Clear();
+        anchorIdsToLocate.AddRange(anchorIds);
+
+        anchorLocateCriteria.Identifiers = anchorIdsToLocate.ToArray();
+    }
+
+    private void Log(string message)
+    {
+        var msg = message + "\n" + logText.text;
+        logText.text = msg;
+        Debug.Log(message);
     }
 
     #endregion
