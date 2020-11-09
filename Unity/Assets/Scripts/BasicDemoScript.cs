@@ -176,7 +176,7 @@ public class BasicDemoScript : InputInteractionBase
     }
 
     private async Task StartASAAsync()
-    {
+    {   
         Log("\nStarting...");
 
         await Task.Delay(3000);
@@ -207,6 +207,7 @@ public class BasicDemoScript : InputInteractionBase
 
             await CloudManager.StartSessionAsync();
 
+            logText.text = "";
             Log("Tap anywhere to place object");
             canPlaceObject = true;
         }
@@ -236,6 +237,7 @@ public class BasicDemoScript : InputInteractionBase
         Log("Resetting session...");
         await CloudManager.ResetSessionAsync();
 
+        logText.text = "";
         Log("Ready for querying...");
     }
 
@@ -267,6 +269,15 @@ public class BasicDemoScript : InputInteractionBase
 
         Log("Cleaning up...");
         CleanupSpawnedObjects();
+    }
+
+    public void ToggleLogs()
+    {
+        var parent = logText.transform.gameObject;
+        if (parent.activeInHierarchy)
+            parent.SetActive(false);
+        else
+            parent.SetActive(true);
     }
 
     /// <summary>
